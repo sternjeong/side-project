@@ -561,6 +561,7 @@
         <div class="btn-row">
           <button class="btn" id="dedup-clear-btn">🗑️ 목록 비우기</button>
           <button class="btn primary" id="dedup-run-btn">✂️ 중복 제거</button>
+          <button class="btn hidden" id="dedup-save-btn">💾 전체 저장</button>
         </div>
 
       </div>
@@ -1289,14 +1290,39 @@
     const removed = before - dedupFiles.length;
 
     renderDedupQueue();
+    $('dedup-save-btn').classList.remove('hidden');
     $('dedup-st-msg').textContent = `✓ 중복 제거 완료 — ${removed}개 원본 파일 제거됨, ${dedupFiles.length}개 남음`;
     $('dedup-st-count').textContent = `${dedupFiles.length}개 남음`;
+  });
+
+  /* ── 전체 저장 ── */
+  $('dedup-save-btn').addEventListener('click', async () => {
+    if (!dedupFiles.length) return;
+    const btn = $('dedup-save-btn');
+    btn.disabled = true;
+    $('dedup-st-msg').textContent = `저장 중... 0 / ${dedupFiles.length}`;
+
+    for (let i = 0; i < dedupFiles.length; i++) {
+      const file = dedupFiles[i];
+      const url = URL.createObjectURL(file);
+      const a = Object.assign(document.createElement('a'), { href: url, download: file.name });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      $('dedup-st-msg').textContent = `저장 중... ${i + 1} / ${dedupFiles.length}`;
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    btn.disabled = false;
+    $('dedup-st-msg').textContent = `✓ ${dedupFiles.length}개 파일 저장 완료`;
   });
 
   $('dedup-clear-btn').addEventListener('click', () => {
     dedupFiles = [];
     renderDedupQueue();
     $('dedup-queue-panel').classList.add('hidden');
+    $('dedup-save-btn').classList.add('hidden');
     $('dedup-st-msg').textContent = '파일을 끌어다 놓은 뒤 [중복 제거] 버튼을 누르세요.';
     $('dedup-st-count').textContent = '';
   });
