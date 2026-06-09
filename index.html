@@ -386,6 +386,7 @@
     <span class="menu-item">편집(E)</span>
     <span class="menu-item">보기(V)</span>
     <span class="menu-item">도움말(H)</span>
+    <span class="menu-item" id="dl-self-btn" style="margin-left:auto; color:#00008B; font-weight:bold;">📥 HTML 파일 저장</span>
   </div>
 
   <!-- Content -->
@@ -539,6 +540,25 @@
   })();
 
   $('close-btn').addEventListener('click', () => $('main-win').style.display = 'none');
+
+  /* ─── Self-download (HTML 파일 저장) ──────────── */
+  $('dl-self-btn').addEventListener('click', async () => {
+    try {
+      const res  = await fetch(location.href);
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/html' });
+      const url  = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement('a'), {
+        href: url, download: 'HalfFrameSplitter.html'
+      });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      alert('로컬 파일에서는 다운로드가 지원되지 않습니다.\nhttps://sternjeong.github.io/side-project/ 에서 열고 다시 클릭하세요.');
+    }
+  });
 
   /* ─── State ───────────────────────────────────── */
   /*
