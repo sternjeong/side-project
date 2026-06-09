@@ -534,10 +534,6 @@
     </div>
   </div>
 
-  <div class="menubar" style="font-size:10px; color:#555; padding:3px 8px; display:block;">
-    같은 이름의 원본과 수동 편집본(예: <code>photo.JPG</code> &amp; <code>photo_(1).JPG</code>)이 함께 있으면, 원본을 <b>삭제 권장</b>으로 분류합니다.
-  </div>
-
   <div class="content">
 
     <!-- Upload -->
@@ -547,46 +543,24 @@
         <div class="upload-zone" id="dedup-upload-zone">
           <div class="uz-icon">🗂️</div>
           <div class="uz-main">정리할 파일들을 여기에 끌어다 놓으세요 (여러 장 가능)</div>
-          <div class="uz-sub">중복 파일을 분석하여 삭제 권장 목록을 보여줍니다</div>
+          <div class="uz-sub">photo.JPG + photo_(1).JPG 가 함께 있으면 원본을 제거합니다</div>
           <input type="file" id="dedup-file-input" multiple hidden>
         </div>
       </div>
     </div>
 
-    <!-- Results -->
-    <div class="panel hidden" id="dedup-result-panel">
-      <div class="panel-head" id="dedup-result-head">📊&nbsp; 분석 결과</div>
-      <div class="panel-body" style="padding:7px; display:flex; flex-direction:column; gap:8px;">
+    <!-- Queue + action -->
+    <div class="panel hidden" id="dedup-queue-panel">
+      <div class="panel-head" id="dedup-queue-head">📋&nbsp; 파일 목록</div>
+      <div class="panel-body" style="padding:7px; display:flex; flex-direction:column; gap:6px;">
 
-        <!-- Summary bar -->
-        <div id="dedup-summary" style="
-          background:#F0F4FF; border:1px solid #A0B4E0;
-          padding:6px 10px; font-size:11px; display:flex; gap:16px; flex-wrap:wrap;
-        "></div>
-
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-
-          <!-- Keep list -->
-          <div>
-            <div style="font-size:10px; font-weight:bold; color:#1A5020; margin-bottom:3px;">
-              ✅ 유지할 파일 <span id="keep-count" style="font-weight:normal; color:#555;"></span>
-            </div>
-            <div class="q-list" id="dedup-keep-list" style="max-height:240px;"></div>
-          </div>
-
-          <!-- Remove list -->
-          <div>
-            <div style="font-size:10px; font-weight:bold; color:#8B0000; margin-bottom:3px;">
-              🗑️ 삭제 권장 파일 <span id="remove-count" style="font-weight:normal; color:#555;"></span>
-            </div>
-            <div class="q-list" id="dedup-remove-list" style="max-height:240px;"></div>
-          </div>
-
+        <div class="q-list" id="dedup-q-list" style="max-height:260px;">
+          <div class="q-empty">파일을 불러오면 여기에 표시됩니다.</div>
         </div>
 
         <div class="btn-row">
-          <button class="btn" id="dedup-reset-btn">↺ 초기화</button>
-          <button class="btn" id="dedup-copy-btn">📋 삭제 목록 복사</button>
+          <button class="btn" id="dedup-clear-btn">🗑️ 목록 비우기</button>
+          <button class="btn primary" id="dedup-run-btn">✂️ 중복 제거</button>
         </div>
 
       </div>
@@ -595,7 +569,7 @@
   </div>
 
   <div class="statusbar">
-    <div class="st-cell grow" id="dedup-st-msg">파일을 끌어다 놓으면 중복을 분석합니다.</div>
+    <div class="st-cell grow" id="dedup-st-msg">파일을 끌어다 놓은 뒤 [중복 제거] 버튼을 누르세요.</div>
     <div class="st-cell w90" id="dedup-st-count">&nbsp;</div>
   </div>
 
@@ -1229,11 +1203,12 @@
 
   const $ = id => document.getElementById(id);
 
-  document.getElementById('dedup-close-btn').addEventListener('click',
-    () => document.getElementById('dedup-win').style.display = 'none');
+  $('dedup-close-btn').addEventListener('click', () => $('dedup-win').style.display = 'none');
 
   const zone      = $('dedup-upload-zone');
   const fileInput = $('dedup-file-input');
+
+  let dedupFiles = []; // all loaded File objects
 
   zone.addEventListener('click',     () => fileInput.click());
   zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('drag-over'); });
@@ -1241,101 +1216,90 @@
   zone.addEventListener('drop', e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    analyze([...e.dataTransfer.files]);
+    addDedupFiles([...e.dataTransfer.files]);
   });
-  fileInput.addEventListener('change', e => { analyze([...e.target.files]); e.target.value = ''; });
+  fileInput.addEventListener('change', e => { addDedupFiles([...e.target.files]); e.target.value = ''; });
 
-  $('dedup-reset-btn').addEventListener('click', reset);
-  $('dedup-copy-btn').addEventListener('click', copyRemoveList);
-
-  let removeNames = [];
-
-  function analyze(files) {
+  function addDedupFiles(files) {
     if (!files.length) return;
+    // Avoid exact duplicates already in the list
+    const existing = new Set(dedupFiles.map(f => f.name.toLowerCase()));
+    files.forEach(f => { if (!existing.has(f.name.toLowerCase())) dedupFiles.push(f); });
+    renderDedupQueue();
+    $('dedup-queue-panel').classList.remove('hidden');
+    updateDedupStatus();
+  }
 
-    // Normalize: build name → File map (case-insensitive key)
-    const nameMap = new Map();
-    files.forEach(f => nameMap.set(f.name.toLowerCase(), f));
+  function renderDedupQueue() {
+    const list = $('dedup-q-list');
+    if (!dedupFiles.length) {
+      list.innerHTML = '<div class="q-empty">파일을 불러오면 여기에 표시됩니다.</div>';
+      $('dedup-queue-head').textContent = '📋  파일 목록';
+      return;
+    }
+    $('dedup-queue-head').textContent = `📋  파일 목록 — ${dedupFiles.length}개`;
+    list.innerHTML = dedupFiles.map((f, i) => {
+      const kb = (f.size / 1024).toFixed(0);
+      return `<div class="q-item" style="cursor:default;" id="ddi-${i}">
+        <div class="q-info">
+          <div class="q-name">${f.name}</div>
+          <div class="q-meta">${kb} KB</div>
+        </div>
+        <div class="q-del" onclick="dedupRemoveOne(${i})">✕</div>
+      </div>`;
+    }).join('');
+  }
 
-    const keep   = [];
-    const remove = [];
+  window.dedupRemoveOne = function(i) {
+    dedupFiles.splice(i, 1);
+    renderDedupQueue();
+    if (!dedupFiles.length) $('dedup-queue-panel').classList.add('hidden');
+    updateDedupStatus();
+  };
 
-    // For each file, check if it has a _(N) counterpart → mark original as remove
-    const markedRemove = new Set();
+  function updateDedupStatus() {
+    $('dedup-st-count').textContent = dedupFiles.length ? `${dedupFiles.length}개` : '';
+    $('dedup-st-msg').textContent = dedupFiles.length
+      ? `${dedupFiles.length}개 파일 로드됨 — [중복 제거] 버튼을 누르세요.`
+      : '파일을 끌어다 놓은 뒤 [중복 제거] 버튼을 누르세요.';
+  }
 
-    files.forEach(f => {
+  /* ── 중복 제거 버튼 ── */
+  $('dedup-run-btn').addEventListener('click', () => {
+    if (!dedupFiles.length) return;
+
+    const nameMap = new Map(dedupFiles.map(f => [f.name.toLowerCase(), true]));
+    const toRemove = new Set();
+
+    dedupFiles.forEach(f => {
       const m = f.name.match(/^(.+)_\((\d+)\)(\.[^.]+)$/i);
       if (m) {
         const originalKey = (m[1] + m[3]).toLowerCase();
-        if (nameMap.has(originalKey)) markedRemove.add(originalKey);
+        if (nameMap.has(originalKey)) toRemove.add(originalKey);
       }
     });
 
-    files.forEach(f => {
-      if (markedRemove.has(f.name.toLowerCase())) remove.push(f);
-      else keep.push(f);
-    });
-
-    removeNames = remove.map(f => f.name);
-
-    renderResults(keep, remove, files.length);
-    $('dedup-result-panel').classList.remove('hidden');
-    $('dedup-st-msg').textContent = `분석 완료 — 총 ${files.length}개 파일`;
-    $('dedup-st-count').textContent = `유지 ${keep.length} / 삭제 ${remove.length}`;
-  }
-
-  function renderResults(keep, remove, total) {
-    const pairs = remove.length;
-
-    $('dedup-result-head').textContent = `📊  분석 결과 — 총 ${total}개 파일`;
-
-    $('dedup-summary').innerHTML =
-      `<span>📁 전체: <b>${total}</b>개</span>` +
-      `<span style="color:#1A5020;">✅ 유지: <b>${keep.length}</b>개</span>` +
-      `<span style="color:#8B0000;">🗑️ 삭제 권장: <b>${remove.length}</b>개</span>` +
-      (pairs ? `<span style="color:#555;">→ ${pairs}쌍의 중복 발견 (수동 편집본 우선 보존)</span>` : '<span style="color:#555;">중복 없음</span>');
-
-    $('keep-count').textContent = `(${keep.length})`;
-    $('remove-count').textContent = `(${remove.length})`;
-
-    $('dedup-keep-list').innerHTML = keep.length
-      ? keep.map(f => fileRow(f, false)).join('')
-      : '<div class="q-empty">없음</div>';
-
-    $('dedup-remove-list').innerHTML = remove.length
-      ? remove.map(f => fileRow(f, true)).join('')
-      : '<div class="q-empty" style="color:#aaa;">중복 파일 없음 ✓</div>';
-  }
-
-  function fileRow(file, isRemove) {
-    const kb = (file.size / 1024).toFixed(0);
-    const color = isRemove ? 'color:#8B0000;' : 'color:#1A5020;';
-    return `<div class="q-item" style="cursor:default;">
-      <div class="q-info">
-        <div class="q-name" style="${color} font-size:10px;">${file.name}</div>
-        <div class="q-meta">${kb} KB</div>
-      </div>
-    </div>`;
-  }
-
-  function reset() {
-    $('dedup-result-panel').classList.add('hidden');
-    $('dedup-st-msg').textContent = '파일을 끌어다 놓으면 중복을 분석합니다.';
-    $('dedup-st-count').textContent = '';
-    removeNames = [];
-  }
-
-  function copyRemoveList() {
-    if (!removeNames.length) {
-      $('dedup-st-msg').textContent = '삭제 권장 파일이 없습니다.';
+    if (!toRemove.size) {
+      $('dedup-st-msg').textContent = '중복 파일이 없습니다. 모든 파일이 유지됩니다.';
       return;
     }
-    navigator.clipboard.writeText(removeNames.join('\n')).then(() => {
-      $('dedup-st-msg').textContent = `📋 ${removeNames.length}개 파일명이 클립보드에 복사되었습니다.`;
-    }).catch(() => {
-      $('dedup-st-msg').textContent = removeNames.join(', ');
-    });
-  }
+
+    const before = dedupFiles.length;
+    dedupFiles = dedupFiles.filter(f => !toRemove.has(f.name.toLowerCase()));
+    const removed = before - dedupFiles.length;
+
+    renderDedupQueue();
+    $('dedup-st-msg').textContent = `✓ 중복 제거 완료 — ${removed}개 원본 파일 제거됨, ${dedupFiles.length}개 남음`;
+    $('dedup-st-count').textContent = `${dedupFiles.length}개 남음`;
+  });
+
+  $('dedup-clear-btn').addEventListener('click', () => {
+    dedupFiles = [];
+    renderDedupQueue();
+    $('dedup-queue-panel').classList.add('hidden');
+    $('dedup-st-msg').textContent = '파일을 끌어다 놓은 뒤 [중복 제거] 버튼을 누르세요.';
+    $('dedup-st-count').textContent = '';
+  });
 
 })();
 </script>
