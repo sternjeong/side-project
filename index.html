@@ -1272,7 +1272,7 @@
     const toRemove = new Set();
 
     dedupFiles.forEach(f => {
-      const m = f.name.match(/^(.+)_\((\d+)\)(\.[^.]+)$/i);
+      const m = f.name.match(/^(.+)[_ ]\((\d+)\)(\.[^.]+)$/i);
       if (m) {
         const originalKey = (m[1] + m[3]).toLowerCase();
         if (nameMap.has(originalKey)) toRemove.add(originalKey);
