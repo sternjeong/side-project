@@ -1273,26 +1273,9 @@
 
     dedupFiles.forEach(f => {
       const m = f.name.match(/^(.+)[_ ]\((\d+)\)(\.[^.]+)$/i);
-      if (!m) return;
-
-      // 1) 정확히 같은 이름 원본 (83980037_frame2.JPG ↔ 83980037_frame2 (1).JPG)
-      const exactKey = (m[1] + m[3]).toLowerCase();
-      if (nameMap.has(exactKey)) {
-        toRemove.add(exactKey);
-        return;
-      }
-
-      // 2) 숫자 prefix가 달라도 _frameN 부분이 같은 원본
-      //    예: 83980038_frame2 (1).JPG ↔ 83980037_frame2.JPG
-      const frameMatch = m[1].match(/(_frame\d+)$/i);
-      if (frameMatch) {
-        const frameSuffix = (frameMatch[1] + m[3]).toLowerCase(); // e.g. "_frame2.jpg"
-        dedupFiles.forEach(other => {
-          const ol = other.name.toLowerCase();
-          if (ol.endsWith(frameSuffix) && !/[_ ]\(\d+\)\.[^.]+$/.test(ol)) {
-            toRemove.add(ol);
-          }
-        });
+      if (m) {
+        const originalKey = (m[1] + m[3]).toLowerCase();
+        if (nameMap.has(originalKey)) toRemove.add(originalKey);
       }
     });
 
