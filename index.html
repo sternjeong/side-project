@@ -601,6 +601,7 @@
         tctx.drawImage(img, 0, 0, 60, 40);
         item.thumbUrl = tc.toDataURL('image/jpeg', 0.5);
 
+        autoDetectForItem(idx);
         renderQueue();
 
         if (idx === activeIdx) {
@@ -789,63 +790,88 @@
   }
 
   /**
-   * Detect the LEFT and RIGHT edges of the dark gap strip.
-   * Returns { gapL, gapR } as fractions (0–1).
+   * Robustly detect the LEFT and RIGHT pixel edges of the film gap strip.
+   * Returns { gapL, gapR } as 0–1 fractions. Falls back to 47.2/52.8 if
+   * detection is implausible.
    *
-   * Algorithm:
-   *   1. Compute luminance average per column (or row).
-   *   2. Smooth with a small window.
-   *   3. Find the global darkest point in the search region (middle 40%).
-   *   4. Compute threshold = min + (avg − min) * 0.45
-   *   5. Walk left/right from the darkest point until brightness > threshold.
-   *      Those are the gap edges.
+   * Key insight: the gap is both DARK and UNIFORM top-to-bottom.
+   * Dark photo content is dark but has vertical variation (non-zero variance).
+   * We score each column by (low luminance) × (low variance) and find the
+   * peak score near the image center, then walk outward to find edges.
    */
   function findGapEdges(data, W, H, axis) {
+    const FALLBACK_L = 0.472, FALLBACK_R = 0.528;
+
     const len   = axis === 'col' ? W : H;
     const cross = axis === 'col' ? H : W;
-    const lo = Math.floor(len * 0.25);
-    const hi = Math.floor(len * 0.75);
 
-    const lum = new Float32Array(len);
+    // Search only in the middle 30–70 % to avoid outer borders
+    const lo = Math.floor(len * 0.30);
+    const hi = Math.floor(len * 0.70);
+
+    const lumMean = new Float32Array(len);
+    const lumVar  = new Float32Array(len);
+
     for (let i = lo; i < hi; i++) {
-      let sum = 0;
+      let sum = 0, sum2 = 0;
       for (let j = 0; j < cross; j++) {
-        const idx = axis === 'col'
-          ? (j * W + i) * 4
-          : (i * W + j) * 4;
-        sum += data[idx] * 0.2126 + data[idx+1] * 0.7152 + data[idx+2] * 0.0722;
+        const px = axis === 'col' ? (j * W + i) * 4 : (i * W + j) * 4;
+        const l  = data[px] * 0.2126 + data[px+1] * 0.7152 + data[px+2] * 0.0722;
+        sum  += l;
+        sum2 += l * l;
       }
-      lum[i] = sum / cross;
+      lumMean[i] = sum / cross;
+      lumVar[i]  = sum2 / cross - (lumMean[i] * lumMean[i]);
     }
 
-    // Smooth (radius 6)
-    const sm = lum.slice();
-    for (let i = lo + 6; i < hi - 6; i++) {
-      sm[i] = (lum[i-6] + lum[i-3]*2 + lum[i]*4 + lum[i+3]*2 + lum[i+6]) / 10;
-    }
+    // Normalise variance so we can weight it fairly
+    let maxVar = 1;
+    for (let i = lo; i < hi; i++) if (lumVar[i] > maxVar) maxVar = lumVar[i];
 
-    // Find minimum and average
-    let minVal = Infinity, minIdx = Math.floor(len / 2);
-    let sumAll = 0;
+    // Gap score: rewards dark columns that are also vertically uniform.
+    // uniformity = 1 – sqrt(normVar)  (square-root compresses the range)
+    const score = new Float32Array(len);
     for (let i = lo; i < hi; i++) {
-      sumAll += sm[i];
-      if (sm[i] < minVal) { minVal = sm[i]; minIdx = i; }
+      const normLum  = lumMean[i] / 255;
+      const normVar  = lumVar[i]  / maxVar;
+      const darkness    = 1 - normLum;
+      const uniformity  = 1 - Math.sqrt(normVar);
+      score[i] = darkness * uniformity;
     }
-    const avg = sumAll / (hi - lo);
 
-    // Threshold: 45% of the way from min towards avg
-    const thresh = minVal + (avg - minVal) * 0.45;
+    // Light smoothing (radius 3) – keep gap edges sharp
+    const sm = score.slice();
+    for (let i = lo + 3; i < hi - 3; i++) {
+      sm[i] = (score[i-3] + score[i-1]*2 + score[i]*4 + score[i+1]*2 + score[i+3]) / 10;
+    }
 
-    // Walk left to find gap left edge
+    // Find the peak score position
+    let maxScore = 0, peakIdx = Math.floor(len / 2);
+    for (let i = lo; i < hi; i++) {
+      if (sm[i] > maxScore) { maxScore = sm[i]; peakIdx = i; }
+    }
+
+    // If the peak score is very low the image is probably bright overall –
+    // gap may not be detectable; fall back.
+    if (maxScore < 0.15) return { gapL: FALLBACK_L, gapR: FALLBACK_R };
+
+    // Walk outward from peak: edge = first column where score < 40% of peak
+    const edgeThresh = maxScore * 0.40;
+
     let gapLpx = lo;
-    for (let i = minIdx; i >= lo; i--) {
-      if (sm[i] > thresh) { gapLpx = i; break; }
+    for (let i = peakIdx; i >= lo; i--) {
+      if (sm[i] < edgeThresh) { gapLpx = i + 1; break; }
     }
 
-    // Walk right to find gap right edge
     let gapRpx = hi - 1;
-    for (let i = minIdx; i < hi; i++) {
-      if (sm[i] > thresh) { gapRpx = i; break; }
+    for (let i = peakIdx; i < hi; i++) {
+      if (sm[i] < edgeThresh) { gapRpx = i - 1; break; }
+    }
+
+    // Sanity: gap must be between 0.3 % and 12 % of the image dimension
+    const gapFrac = (gapRpx - gapLpx) / len;
+    if (gapFrac < 0.003 || gapFrac > 0.12) {
+      return { gapL: FALLBACK_L, gapR: FALLBACK_R };
     }
 
     return { gapL: gapLpx / len, gapR: gapRpx / len };
